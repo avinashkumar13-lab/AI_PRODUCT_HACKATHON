@@ -1,6 +1,7 @@
 import React from 'react';
 import { ConversationProvider } from '@elevenlabs/react';
 import { AppProvider, useApp } from './context/AppContext';
+import { GmailProvider } from './context/GmailContext';
 import { Navbar } from './components/layout/Navbar';
 import { Sidebar } from './components/layout/Sidebar';
 import { DashboardView } from './components/manager/DashboardView';
@@ -13,6 +14,7 @@ import { RiskEngineView } from './components/manager/RiskEngineView';
 import { AICopilotView } from './components/manager/AICopilotView';
 import { AnalyticsView } from './components/manager/AnalyticsView';
 import { SettingsView } from './components/manager/SettingsView';
+import { GmailHubView } from './components/gmail/GmailHubView';
 
 import { EmployeeDashboardView } from './components/employee/EmployeeDashboardView';
 import { EmployeeTasksView } from './components/employee/EmployeeTasksView';
@@ -48,6 +50,8 @@ const AppContent: React.FC = () => {
           return <TaskManagementView />;
         case 'projects':
           return <ProjectManagementView />;
+        case 'gmail':
+          return <GmailHubView />;
         case 'calendar':
           return <CalendarView />;
         case 'risks':
@@ -71,6 +75,8 @@ const AppContent: React.FC = () => {
           return <EmployeeTasksView />;
         case 'my_projects':
           return <EmployeeProjectsView />;
+        case 'gmail':
+          return <GmailHubView />;
         case 'my_calendar':
           return <EmployeeCalendarView />;
         case 'my_workload':
@@ -126,8 +132,11 @@ export default function App() {
   return (
     <ConversationProvider>
       <AppProvider>
-        <AppContent />
+        <GmailProvider>
+          <AppContent />
+        </GmailProvider>
       </AppProvider>
     </ConversationProvider>
   );
 }
+

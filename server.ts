@@ -1234,6 +1234,137 @@ Provide a clear, professional, well-structured response to the user with exact n
     }
   });
 
+  // AI Email Drafting Endpoint
+  app.post('/api/gemini/draft-email', async (req, res) => {
+    try {
+      const { prompt, tone = 'professional', context = {} } = req.body;
+      const { recipientName, subject, employeeName, taskTitle, projectKey, deadline, priority } = context;
+
+      let emailSubject = subject || 'Workforce Update & Next Steps';
+      let emailBody = '';
+
+      if (process.env.GEMINI_API_KEY) {
+        try {
+          const ai = getGeminiAI();
+          const userPrompt = `Draft an email based on the following request:
+Request: ${prompt || 'Draft an update email'}
+Tone: ${tone}
+Context:
+${recipientName ? `- Recipient: ${recipientName}` : ''}
+${employeeName ? `- Employee / Assignee: ${employeeName}` : ''}
+${taskTitle ? `- Related Task: ${taskTitle}` : ''}
+${projectKey ? `- Project: ${projectKey}` : ''}
+${deadline ? `- Deadline: ${deadline}` : ''}
+${priority ? `- Priority: ${priority}` : ''}
+
+Output JSON format:
+{
+  "subject": "Clear, concise email subject line",
+  "body": "Formatted email body in plain text with clear paragraphs",
+  "bodyHtml": "Rich HTML formatted body with <p>, <strong>, <ul><li> tags as appropriate"
+}`;
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.7-flash',
+            contents: userPrompt,
+            config: {
+              responseMimeType: 'application/json',
+              systemInstruction: 'You are TeamPilot AI executive email assistant. Create polite, clear, high-impact enterprise correspondence.'
+            }
+          });
+
+          if (response.text) {
+            const parsed = JSON.parse(response.text);
+            return res.json(parsed);
+          }
+        } catch (err) {
+          console.warn('Gemini draft email error, using fallback:', err);
+        }
+      }
+
+      // Fallback draft template
+      res.json({
+        subject: emailSubject,
+        body: `Hi ${recipientName || 'Team'},\n\nI am writing to share a brief update regarding ${taskTitle || 'our ongoing milestones'}.\n\nPlease let me know if you have any questions or require additional support.\n\nBest regards,\nTeam Pilot AI Workspace`,
+        bodyHtml: `<p>Hi ${recipientName || 'Team'},</p><p>I am writing to share a brief update regarding <strong>${taskTitle || 'our ongoing milestones'}</strong>.</p><p>Please let me know if you have any questions or require additional support.</p><p>Best regards,<br/><strong>Team Pilot AI Workspace</strong></p>`
+      });
+    } catch (error: any) {
+      console.error('Draft email error:', error);
+      res.status(500).json({ error: error.message || 'Failed to draft email' });
+    }
+  });
+
+  // AI Email to Task Parser Endpoint
+  app.post('/api/gemini/email-to-task', async (req, res) => {
+    try {
+      const { emailSubject, emailBody, emailFrom, employees = [], projects = [] } = req.body;
+
+      if (process.env.GEMINI_API_KEY) {
+        try {
+          const ai = getGeminiAI();
+          const prompt = `Extract a structured project task from this email content:
+Sender: ${emailFrom}
+Subject: ${emailSubject}
+Body:
+${(emailBody || '').substring(0, 3000)}
+
+Available Projects:
+${projects.map((p: Project) => `- ID: ${p.id}, Key: ${p.key}, Name: ${p.name}`).join('\n')}
+
+Available Team Members:
+${employees.map((e: Employee) => `- ID: ${e.id}, Name: ${e.name}, Role: ${e.role}, Skills: ${e.skills.join(', ')}`).join('\n')}
+
+Output JSON format:
+{
+  "title": "Concise imperative task title (e.g. 'Implement Stripe Webhook Validation')",
+  "description": "Clear 2-3 sentence task description summarizing requirements and acceptance criteria",
+  "priority": "Critical" | "High" | "Medium" | "Low",
+  "estimatedHours": 8,
+  "requiredSkills": ["Skill 1", "Skill 2"],
+  "suggestedProjectId": "matching project ID from list or default",
+  "suggestedEmployeeId": "matching employee ID based on skills or null",
+  "deadlineDaysFromNow": 5
+}`;
+
+          const response = await ai.models.generateContent({
+            model: 'gemini-3.7-flash',
+            contents: prompt,
+            config: {
+              responseMimeType: 'application/json',
+              systemInstruction: 'You are TeamPilot AI Task Extraction Engine. Turn unstructured client or team emails into actionable engineering deliverables.'
+            }
+          });
+
+          if (response.text) {
+            const parsed = JSON.parse(response.text);
+            return res.json(parsed);
+          }
+        } catch (err) {
+          console.warn('Gemini email-to-task error, using fallback:', err);
+        }
+      }
+
+      // Fallback extraction
+      const fallbackProject = projects[0]?.id || 'proj_alpha';
+      const fallbackEmployee = employees[0]?.id || null;
+
+      res.json({
+        title: (emailSubject || 'New Task from Email').replace(/^(Re|Fwd):\s*/i, ''),
+        description: (emailBody || '').slice(0, 300).trim() || 'Task extracted from Gmail message.',
+        priority: 'Medium',
+        estimatedHours: 8,
+        requiredSkills: ['Full Stack', 'API'],
+        suggestedProjectId: fallbackProject,
+        suggestedEmployeeId: fallbackEmployee,
+        deadlineDaysFromNow: 7
+      });
+    } catch (error: any) {
+      console.error('Email to task error:', error);
+      res.status(500).json({ error: error.message || 'Failed to extract task from email' });
+    }
+  });
+
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

@@ -1,5 +1,6 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { useGmail } from '../../context/GmailContext';
 import {
   LayoutDashboard,
   Users,
@@ -16,7 +17,8 @@ import {
   Sliders,
   UserCircle2,
   ListTodo,
-  CalendarClock
+  CalendarClock,
+  Mail
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -29,12 +31,15 @@ export const Sidebar: React.FC = () => {
     teamAnalytics
   } = useApp();
 
+  const { isGmailConnected, unreadCount: gmailUnreadCount } = useGmail();
+
   const managerNav = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'workload', label: 'Workload Matrix', icon: Gauge, badge: teamAnalytics.overloadedEmployeesCount > 0 ? `${teamAnalytics.overloadedEmployeesCount} ALERT` : undefined, badgeColor: 'border border-[#FF3D00] text-[#FF3D00] bg-[#FF3D00]/10' },
     { id: 'team', label: 'Team Directory', icon: Users },
     { id: 'tasks', label: 'Task Hub & Kanban', icon: CheckSquare },
     { id: 'projects', label: 'Projects', icon: FolderKanban },
+    { id: 'gmail', label: 'Gmail Workspace', icon: Mail, badge: isGmailConnected && gmailUnreadCount > 0 ? `${gmailUnreadCount} NEW` : undefined, badgeColor: 'bg-white text-black font-mono font-black' },
     { id: 'calendar', label: 'Timeline & Calendar', icon: Calendar },
     { id: 'risks', label: 'Risk Engine', icon: ShieldAlert, badge: teamAnalytics.atRiskTasks > 0 ? `${teamAnalytics.atRiskTasks} AT RISK` : undefined, badgeColor: 'border border-white/40 text-white bg-white/10' },
     { id: 'ai_copilot', label: 'AI Manager Copilot', icon: Bot, isSpecial: true },
@@ -47,12 +52,14 @@ export const Sidebar: React.FC = () => {
     { id: 'my_dashboard', label: 'My Dashboard', icon: LayoutDashboard },
     { id: 'my_tasks', label: 'Assigned Tasks', icon: ListTodo },
     { id: 'my_projects', label: 'My Projects', icon: FolderKanban },
+    { id: 'gmail', label: 'Team Gmail', icon: Mail, badge: isGmailConnected && gmailUnreadCount > 0 ? `${gmailUnreadCount} NEW` : undefined, badgeColor: 'bg-white text-black font-mono font-black' },
     { id: 'my_calendar', label: 'My Schedule', icon: CalendarClock },
     { id: 'my_workload', label: 'Capacity Matrix', icon: Gauge },
     { id: 'ai_assistant', label: 'AI Assistant', icon: Bot, isSpecial: true },
     { id: 'notifications', label: 'Notifications', icon: Bell, badge: unreadNotificationsCount > 0 ? `${unreadNotificationsCount}` : undefined, badgeColor: 'bg-[#FF3D00] text-black font-mono font-black' },
     { id: 'profile', label: 'Profile & Skills', icon: UserCircle2 }
   ];
+
 
   const currentNav = currentRole === 'manager' ? managerNav : employeeNav;
 

@@ -242,3 +242,44 @@ export interface DailyScheduleItem {
   durationHours: number;
   category: string;
 }
+
+export interface GmailMessageSummary {
+  id: string;
+  threadId: string;
+  snippet: string;
+  subject: string;
+  from: string;
+  to: string;
+  date: string;
+  isUnread: boolean;
+  isStarred: boolean;
+  labelIds: string[];
+  bodyHtml?: string;
+  bodyText?: string;
+}
+
+export interface GmailUserProfile {
+  emailAddress: string;
+  messagesTotal: number;
+  threadsTotal: number;
+  historyId: string;
+}
+
+export interface GmailDraftPayload {
+  to: string;
+  subject: string;
+  body: string;
+  threadId?: string;
+  inReplyTo?: string;
+}
+
+export interface GmailSendPayload {
+  to: string;
+  subject: string;
+  body: string;
+  bodyHtml?: string;
+  threadId?: string;
+  inReplyTo?: string;
+  references?: string;
+}
+

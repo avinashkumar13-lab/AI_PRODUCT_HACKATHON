@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { useGmail } from '../../context/GmailContext';
 import { TaskStatus, TaskComment, TaskAttachment } from '../../types';
 import { calculateRealisticDeadline } from '../../utils/deadlineEngine';
 import { analyzeTaskRisk } from '../../utils/riskEngine';
@@ -14,7 +15,8 @@ import {
   FileText,
   Clock,
   ExternalLink,
-  Plus
+  Plus,
+  Mail
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -33,6 +35,9 @@ export const TaskDetailModal: React.FC = () => {
     assignTask,
     updateTask
   } = useApp();
+
+  const { openCompose } = useGmail();
+
 
   const [activeTab, setActiveTab] = useState<'overview' | 'comments' | 'attachments'>('overview');
   const [newComment, setNewComment] = useState('');
@@ -129,12 +134,35 @@ export const TaskDetailModal: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={closeTaskDetailModal}
-            className="p-2 border border-white/10 text-white/40 hover:text-white hover:border-white/30 transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {assignedEmp && (
+              <button
+                id="btn-task-email-assignee"
+                type="button"
+                onClick={() => {
+                  closeTaskDetailModal();
+                  openCompose({
+                    to: assignedEmp.email,
+                    subject: `Update on Task ${task.taskNumber}: ${task.title}`,
+                    body: `Hi ${assignedEmp.name},\n\nI am sending a quick update regarding task [${task.taskNumber}] ${task.title}.\n\nDetails:\n- Priority: ${task.priority}\n- Estimated effort: ${task.estimatedHours}h (${task.progress}% completed)\n- Due date: ${task.deadline}\n\nPlease let me know if you encounter any blockers or need assistance.\n\nBest regards,\nTeam Pilot AI`,
+                    mode: 'new'
+                  });
+                }}
+                className="px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-mono uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer"
+                title={`Email ${assignedEmp.name} regarding this task`}
+              >
+                <Mail className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Email Assignee</span>
+              </button>
+            )}
+
+            <button
+              onClick={closeTaskDetailModal}
+              className="p-2 border border-white/10 text-white/40 hover:text-white hover:border-white/30 transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Tab Navigation */}

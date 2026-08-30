@@ -1,6 +1,6 @@
 {
   "name": "Team Pilot AI",
-  "description": "AI-powered workforce planning, task assignment, and delivery intelligence with ElevenLabs Voice AI.",
+  "description": "Enterprise workforce planning and employee management platform powered by AI with Google Workspace Gmail integration.",
   "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

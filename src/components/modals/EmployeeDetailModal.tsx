@@ -1,12 +1,14 @@
 import React from 'react';
 import { useApp } from '../../context/AppContext';
+import { useGmail } from '../../context/GmailContext';
 import { calculateEmployeeWorkload } from '../../utils/workloadEngine';
 import {
   X,
   Mail,
   MapPin,
   Award,
-  Sliders
+  Sliders,
+  Send
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -21,10 +23,13 @@ export const EmployeeDetailModal: React.FC = () => {
     openTaskDetailModal
   } = useApp();
 
+  const { openCompose } = useGmail();
+
   if (!isEmployeeDetailModalOpen || !selectedEmployeeForModal) return null;
 
   const emp = selectedEmployeeForModal;
   const workload = calculateEmployeeWorkload(emp, tasks, settings);
+
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -69,12 +74,32 @@ export const EmployeeDetailModal: React.FC = () => {
             </div>
           </div>
 
-          <button
-            onClick={closeEmployeeDetailModal}
-            className="p-2 border border-white/10 text-white/40 hover:text-white hover:border-white/30 transition cursor-pointer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              id="btn-employee-send-email"
+              type="button"
+              onClick={() => {
+                closeEmployeeDetailModal();
+                openCompose({
+                  to: emp.email,
+                  subject: `Workload & Deliverables Check-in: ${emp.name}`,
+                  body: `Hi ${emp.name},\n\nI am reaching out regarding your active deliverables and current capacity allocation (${workload.utilization}% load).\n\nPlease let me know if you need any adjustments or support.\n\nBest regards,\nTeam Pilot Workspace`,
+                  mode: 'new'
+                });
+              }}
+              className="px-3 py-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-mono uppercase tracking-wider flex items-center gap-1.5 transition cursor-pointer"
+            >
+              <Mail className="w-3.5 h-3.5" />
+              <span>Send Email</span>
+            </button>
+
+            <button
+              onClick={closeEmployeeDetailModal}
+              className="p-2 border border-white/10 text-white/40 hover:text-white hover:border-white/30 transition cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
