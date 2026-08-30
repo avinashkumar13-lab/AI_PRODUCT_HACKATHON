@@ -7,6 +7,7 @@ import {
   X
 } from 'lucide-react';
 import { calculateEmployeeWorkload } from '../../utils/workloadEngine';
+import { EmptyStateOnboarding } from '../common/EmptyStateOnboarding';
 
 export const TeamView: React.FC = () => {
   const {
@@ -24,7 +25,12 @@ export const TeamView: React.FC = () => {
   const [newEmpSkills, setNewEmpSkills] = useState('React, TypeScript, Node.js, AWS');
   const [newEmpCapacity, setNewEmpCapacity] = useState(40);
 
+  if (employees.length === 0) {
+    return <EmptyStateOnboarding type="employees" />;
+  }
+
   const filteredEmployees = employees.filter((emp) =>
+
     emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     emp.role.toLowerCase().includes(searchTerm.toLowerCase()) ||
     emp.skills.some((s) => s.toLowerCase().includes(searchTerm.toLowerCase()))

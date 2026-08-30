@@ -1,4 +1,5 @@
 import React from 'react';
+import { ConversationProvider } from '@elevenlabs/react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/layout/Navbar';
 import { Sidebar } from './components/layout/Sidebar';
@@ -28,8 +29,10 @@ import { OptimizerModal } from './components/modals/OptimizerModal';
 import { SimulateModal } from './components/modals/SimulateModal';
 import { EmployeeDetailModal } from './components/modals/EmployeeDetailModal';
 import { TaskDetailModal } from './components/modals/TaskDetailModal';
+import { AuthModal } from './components/modals/AuthModal';
 
 const AppContent: React.FC = () => {
+
   const { currentRole, activeTab } = useApp();
 
   const renderActiveView = () => {
@@ -114,14 +117,17 @@ const AppContent: React.FC = () => {
       <SimulateModal />
       <EmployeeDetailModal />
       <TaskDetailModal />
+      <AuthModal />
     </div>
   );
 };
 
 export default function App() {
   return (
-    <AppProvider>
-      <AppContent />
-    </AppProvider>
+    <ConversationProvider>
+      <AppProvider>
+        <AppContent />
+      </AppProvider>
+    </ConversationProvider>
   );
 }

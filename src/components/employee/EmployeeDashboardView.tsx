@@ -28,10 +28,24 @@ export const EmployeeDashboardView: React.FC = () => {
     setActiveTab
   } = useApp();
 
-  const currentEmployee = employees.find((e) => e.id === currentUser.employeeId) || employees[1]; // Aman by default
+  const currentEmployee = employees.find((e) => e.id === currentUser.employeeId) || employees[0] || {
+    id: 'emp_default',
+    name: currentUser.name || 'Team Member',
+    email: currentUser.email || 'employee@teampilot.ai',
+    role: currentUser.title || 'Software Engineer',
+    department: 'Engineering',
+    skills: ['React', 'TypeScript', 'Node.js'],
+    experience: 'Senior' as const,
+    workingHoursPerDay: 8,
+    weeklyCapacity: 40,
+    avatar: currentUser.avatar || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    performanceRating: 4.9,
+    completedTasksCount: 0
+  };
   const workload = calculateEmployeeWorkload(currentEmployee, tasks, settings);
   const myTasks = tasks.filter((t) => t.assignedEmployeeId === currentEmployee.id);
   const activeTasks = myTasks.filter((t) => t.status !== 'Completed');
+
 
   // AI Generated Daily Schedule State
   const [dailySchedule, setDailySchedule] = useState<any[]>([

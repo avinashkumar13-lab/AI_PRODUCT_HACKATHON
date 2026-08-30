@@ -1,8 +1,16 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { Plus, FolderPlus, Calendar, Clock, Users, ArrowRight } from 'lucide-react';
+import { EmptyStateOnboarding } from '../common/EmptyStateOnboarding';
+import { CreateProjectModal } from '../modals/CreateProjectModal';
 
 export const ProjectManagementView: React.FC = () => {
   const { projects, tasks, employees, openTaskDetailModal } = useApp();
+  const [isCreateProjOpen, setIsCreateProjOpen] = useState(false);
+
+  if (projects.length === 0) {
+    return <EmptyStateOnboarding type="projects" />;
+  }
 
   return (
     <div className="space-y-6 pb-12">
@@ -21,6 +29,14 @@ export const ProjectManagementView: React.FC = () => {
             Track multi-project resource allocation, budget consumption, and deliverable commitments.
           </p>
         </div>
+
+        <button
+          onClick={() => setIsCreateProjOpen(true)}
+          className="flex items-center gap-2 px-5 py-2.5 bg-white hover:bg-white/90 text-black text-xs font-black uppercase tracking-widest transition cursor-pointer active:scale-95"
+        >
+          <Plus className="w-4 h-4 stroke-[3]" />
+          <span>Create Project</span>
+        </button>
       </div>
 
       {/* Projects Grid */}
@@ -68,80 +84,75 @@ export const ProjectManagementView: React.FC = () => {
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-[10px] text-white/40 uppercase tracking-wider">Milestone Execution</span>
                     <span className="font-bold text-white">
-                      {completedTasks.length} / {projectTasks.length} TASKS ({progressPercent}%)
+                      {progressPercent}% ({completedTasks.length}/{projectTasks.length} tasks)
                     </span>
                   </div>
-                  <div className="w-full bg-white/5 h-1.5 overflow-hidden">
+                  <div className="w-full h-2 bg-white/10 overflow-hidden">
                     <div
-                      className="bg-[#FF3D00] h-full transition-all duration-500"
+                      className="h-full bg-white transition-all duration-500"
                       style={{ width: `${progressPercent}%` }}
-                    ></div>
+                    />
                   </div>
                 </div>
 
-                {/* Stats Grid */}
-                <div className="grid grid-cols-3 gap-3 p-3.5 bg-black/40 border border-white/10 text-center font-mono text-xs">
-                  <div>
-                    <span className="text-[9px] text-white/40 uppercase">Budget</span>
-                    <p className="font-bold text-white mt-0.5 text-sm">{project.budgetHours}H</p>
-                  </div>
-                  <div>
-                    <span className="text-[9px] text-white/40 uppercase">Client</span>
-                    <p className="font-bold text-white mt-0.5 text-sm uppercase">{project.client}</p>
-                  </div>
-                  <div>
-                    <span className="text-[9px] text-white/40 uppercase">Deadline</span>
-                    <p className="font-bold text-[#FF3D00] mt-0.5 text-sm">{project.deadline}</p>
+                {/* Team Members Avatars */}
+                <div className="pt-2">
+                  <span className="text-[9px] text-white/40 uppercase font-mono tracking-widest block mb-2">Allocated Engineering Pod:</span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {assignedMembers.length > 0 ? (
+                      assignedMembers.map((member) => (
+                        <div
+                          key={member.id}
+                          className="flex items-center gap-2 px-2.5 py-1 bg-white/5 border border-white/10 text-xs"
+                        >
+                          <img
+                            src={member.avatar}
+                            alt={member.name}
+                            className="w-4 h-4 object-cover"
+                          />
+                          <span className="font-medium text-white/90">{member.name.split(' ')[0]}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <span className="text-xs text-white/30 font-mono">No engineers assigned</span>
+                    )}
                   </div>
                 </div>
 
-                {/* Key Deliverables Sample */}
-                <div className="space-y-2 text-xs font-mono">
-                  <p className="font-bold text-white/40 uppercase tracking-widest text-[9px]">
-                    ACTIVE DELIVERABLES ({projectTasks.length})
-                  </p>
-                  <div className="space-y-1.5">
-                    {projectTasks.slice(0, 3).map((t) => (
-                      <div
-                        key={t.id}
-                        onClick={() => openTaskDetailModal(t)}
-                        className="p-2.5 bg-white/[0.02] hover:bg-white/[0.05] border border-white/10 cursor-pointer transition flex items-center justify-between"
-                      >
-                        <span className="font-medium text-white/80 uppercase truncate max-w-[240px]">
-                          {t.taskNumber}: {t.title}
-                        </span>
-                        <span className="text-[10px] font-bold text-[#FF3D00]">{t.estimatedHours}H</span>
-                      </div>
-                    ))}
+                {/* Milestones */}
+                {project.milestones && project.milestones.length > 0 && (
+                  <div className="pt-2 border-t border-white/5 space-y-2">
+                    <span className="text-[9px] text-white/40 uppercase font-mono tracking-widest block">Target Milestones:</span>
+                    <div className="space-y-1.5">
+                      {project.milestones.map((ms) => (
+                        <div key={ms.id} className="flex items-center justify-between text-xs font-mono p-2 bg-white/[0.02] border border-white/5">
+                          <span className={ms.completed ? 'line-through text-white/30' : 'text-white/80'}>{ms.title}</span>
+                          <span className="text-[10px] text-white/40">{ms.dueDate}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
-              {/* Team Members Allocation */}
-              <div className="pt-4 border-t border-white/10 flex items-center justify-between font-mono">
-                <div className="flex items-center gap-2">
-                  <div className="flex -space-x-2">
-                    {assignedMembers.map((m) => (
-                      <img
-                        key={m.id}
-                        src={m.avatar}
-                        alt={m.name}
-                        title={`${m.name} (${m.role})`}
-                        className="w-7 h-7 object-cover border border-white/20"
-                      />
-                    ))}
-                  </div>
-                  <span className="text-[10px] text-white/40 uppercase">
-                    {assignedMembers.length} ENGINEERS
-                  </span>
+              {/* Tasks preview in project */}
+              <div className="pt-4 border-t border-white/10 flex items-center justify-between">
+                <div className="text-[10px] text-white/40 font-mono">
+                  Deadline: <span className="text-white font-bold">{project.deadline}</span>
                 </div>
-
-                <span className="text-[10px] text-white/70 font-bold uppercase tracking-wider">{project.priority} PRIORITY</span>
+                <div className="text-[10px] text-white/40 font-mono">
+                  Budget: <span className="text-white font-bold">{project.budgetHours} hrs</span>
+                </div>
               </div>
             </div>
           );
         })}
       </div>
+
+      <CreateProjectModal
+        isOpen={isCreateProjOpen}
+        onClose={() => setIsCreateProjOpen(false)}
+      />
     </div>
   );
 };

@@ -5,8 +5,9 @@ import { Calendar as CalendarIcon, Clock, CheckCircle2 } from 'lucide-react';
 export const EmployeeCalendarView: React.FC = () => {
   const { currentUser, employees, tasks } = useApp();
 
-  const currentEmployee = employees.find((e) => e.id === currentUser.employeeId) || employees[1];
-  const myTasks = tasks.filter((t) => t.assignedEmployeeId === currentEmployee.id);
+  const currentEmployee = employees.find((e) => e.id === currentUser.employeeId) || employees[0];
+  const myTasks = currentEmployee ? tasks.filter((t) => t.assignedEmployeeId === currentEmployee.id) : [];
+
   const daysInMonth = Array.from({ length: 30 }, (_, i) => i + 1);
 
   const getTasksForDay = (day: number) => {

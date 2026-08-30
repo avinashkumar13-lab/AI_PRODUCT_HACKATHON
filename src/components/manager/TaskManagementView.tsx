@@ -7,6 +7,7 @@ import {
   Kanban,
   List
 } from 'lucide-react';
+import { EmptyStateOnboarding } from '../common/EmptyStateOnboarding';
 
 const STATUS_COLUMNS: TaskStatus[] = [
   'Backlog',
@@ -31,7 +32,12 @@ export const TaskManagementView: React.FC = () => {
   const [filterProject, setFilterProject] = useState('ALL');
   const [filterPriority, setFilterPriority] = useState('ALL');
 
+  if (tasks.length === 0) {
+    return <EmptyStateOnboarding type="tasks" />;
+  }
+
   const filteredTasks = tasks.filter((t) => {
+
     const matchesSearch =
       t.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
       t.taskNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||

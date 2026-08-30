@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import {
@@ -12,7 +12,66 @@ import { calculateRealisticDeadline } from './src/utils/deadlineEngine';
 import { runWorkloadOptimizer, simulateTaskAssignment } from './src/utils/optimizerEngine';
 import { calculateAllWorkloads, calculateTeamAnalytics, calculateEmployeeWorkload } from './src/utils/workloadEngine';
 import { analyzeAllRisks } from './src/utils/riskEngine';
-import { Employee, Task, Project, AppSettings } from './src/types';
+import { Employee, Task, Project, AppSettings, UserRole } from './src/types';
+import { DEMO_EMPLOYEES, DEMO_TASKS, DEMO_PROJECTS, INITIAL_SETTINGS } from './src/data/initialData';
+import {
+  signUpUser,
+  loginUser,
+  requestPasswordReset,
+  resetPasswordWithCode,
+  verifyJwtToken,
+  getUserWorkspace,
+  setUserWorkspace,
+  seedStarterTemplate,
+  getDemoGuestWorkspace
+} from './src/server/authStore';
+
+// Extend Express Request for authenticated user
+interface AuthenticatedRequest extends Request {
+  user?: {
+    userId: string;
+    email: string;
+    name: string;
+    role: UserRole;
+    company?: string;
+  };
+}
+
+// Authentication Middleware (Extracts JWT Bearer token)
+function authMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication token required.' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  const decoded = verifyJwtToken(token);
+  if (!decoded) {
+    return res.status(401).json({ error: 'Invalid or expired authentication token.' });
+  }
+
+  req.user = decoded;
+  next();
+}
+
+// Optional Auth Middleware (Allows guest / demo access if no token)
+function optionalAuthMiddleware(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.split(' ')[1];
+    const decoded = verifyJwtToken(token);
+    if (decoded) {
+      req.user = decoded;
+    }
+  }
+  next();
+}
+
+// Shared in-memory active store for fallback operations
+let activeEmployeesStore: Employee[] = [...DEMO_EMPLOYEES];
+let activeTasksStore: Task[] = [...DEMO_TASKS];
+
+
 
 async function startServer() {
   const app = express();
@@ -25,9 +84,602 @@ async function startServer() {
     res.json({
       status: 'ok',
       service: 'TeamPilot AI Workforce Planning Engine',
-      geminiConfigured: !!process.env.GEMINI_API_KEY
+      geminiConfigured: !!process.env.GEMINI_API_KEY,
+      elevenlabsConfigured: !!(process.env.ELEVENLABS_API_KEY || process.env.ELEVENLABS_AGENT_ID || process.env.VITE_ELEVENLABS_AGENT_ID)
     });
   });
+
+  // ElevenLabs Configuration status endpoint (safe for frontend)
+  app.get('/api/elevenlabs/config', (req, res) => {
+    const rawAgentId = process.env.VITE_ELEVENLABS_AGENT_ID || process.env.ELEVENLABS_AGENT_ID || '';
+    const rawApiKey = process.env.ELEVENLABS_API_KEY || '';
+
+    const isValidAgentId =
+      Boolean(rawAgentId) &&
+      rawAgentId.trim().length >= 10 &&
+      !rawAgentId.startsWith('MY_') &&
+      !rawAgentId.includes('PLACEHOLDER');
+
+    const isValidApiKey =
+      Boolean(rawApiKey) &&
+      rawApiKey.trim().length >= 10 &&
+      !rawApiKey.startsWith('MY_') &&
+      !rawApiKey.includes('PLACEHOLDER');
+
+    res.json({
+      configured: Boolean(isValidAgentId && isValidApiKey),
+      agentId: isValidAgentId ? rawAgentId : null,
+      hasApiKey: isValidApiKey,
+      hasAgentId: isValidAgentId
+    });
+  });
+
+  // ElevenLabs Signed URL generation endpoint
+  app.get('/api/elevenlabs/signed-url', async (req, res) => {
+    try {
+      const apiKey = process.env.ELEVENLABS_API_KEY;
+      const agentId = (req.query.agent_id as string) || process.env.ELEVENLABS_AGENT_ID || process.env.VITE_ELEVENLABS_AGENT_ID;
+
+      if (!apiKey || apiKey.startsWith('MY_') || apiKey.length < 10) {
+        return res.status(400).json({ error: 'ELEVENLABS_API_KEY is not configured or invalid on the server.' });
+      }
+      if (!agentId || agentId.startsWith('MY_') || agentId.length < 10) {
+        return res.status(400).json({ error: 'ELEVENLABS_AGENT_ID is required and must be valid.' });
+      }
+
+      const response = await fetch(`https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`, {
+        method: 'GET',
+        headers: {
+          'xi-api-key': apiKey
+        }
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        return res.status(response.status).json({ error: `ElevenLabs API error: ${errorText}` });
+      }
+
+      const data: any = await response.json();
+      res.json({ signedUrl: data.signed_url });
+    } catch (err: any) {
+      console.warn('ElevenLabs signed URL error:', err);
+      res.status(500).json({ error: err.message || 'Failed to acquire ElevenLabs signed URL' });
+    }
+  });
+
+  // ==========================================
+  // AUTHENTICATION & WORKSPACE ENDPOINTS
+  // ==========================================
+
+  // Signup Endpoint
+  app.post('/api/auth/signup', (req, res) => {
+    try {
+      const { name, email, password, role = 'manager', company = 'My Enterprise' } = req.body;
+      if (!name || !email || !password) {
+        return res.status(400).json({ error: 'Name, email, and password are required.' });
+      }
+
+      const result = signUpUser(name, email, password, role, company);
+      res.status(201).json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message || 'Signup failed' });
+    }
+  });
+
+  // Login Endpoint
+  app.post('/api/auth/login', (req, res) => {
+    try {
+      const { email, password } = req.body;
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required.' });
+      }
+
+      const result = loginUser(email, password);
+      res.json(result);
+    } catch (err: any) {
+      res.status(401).json({ error: err.message || 'Authentication failed' });
+    }
+  });
+
+  // Forgot Password Endpoint
+  app.post('/api/auth/forgot-password', (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ error: 'Email address is required.' });
+      }
+
+      const result = requestPasswordReset(email);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to initiate password recovery' });
+    }
+  });
+
+  // Reset Password with Code Endpoint
+  app.post('/api/auth/reset-password', (req, res) => {
+    try {
+      const { email, resetCode, newPassword } = req.body;
+      if (!email || !resetCode || !newPassword) {
+        return res.status(400).json({ error: 'Email, recovery code, and new password are required.' });
+      }
+
+      const success = resetPasswordWithCode(email, resetCode, newPassword);
+      if (!success) {
+        return res.status(400).json({ error: 'Invalid or expired recovery code.' });
+      }
+
+      res.json({ success: true, message: 'Password has been successfully updated.' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to reset password' });
+    }
+  });
+
+  // Get Current Authenticated User & Workspace
+  app.get('/api/auth/me', authMiddleware, (req: AuthenticatedRequest, res) => {
+    try {
+      const userId = req.user!.userId;
+      const workspace = getUserWorkspace(userId);
+      res.json({
+        user: req.user,
+        workspace
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to retrieve user workspace' });
+    }
+  });
+
+  // Get Workspace (authenticated or guest fallback)
+  app.get('/api/workspace', optionalAuthMiddleware, (req: AuthenticatedRequest, res) => {
+    try {
+      if (req.user) {
+        const ws = getUserWorkspace(req.user.userId);
+        return res.json(ws);
+      }
+      // Demo / Guest mode
+      res.json(getDemoGuestWorkspace());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to fetch workspace' });
+    }
+  });
+
+  // Sync / Persist Workspace
+  app.post('/api/workspace/sync', optionalAuthMiddleware, (req: AuthenticatedRequest, res) => {
+    try {
+      const workspaceData = req.body;
+      if (req.user) {
+        const updated = setUserWorkspace(req.user.userId, workspaceData);
+        return res.json({ success: true, workspace: updated });
+      }
+      // Fallback updates to in-memory active store
+      if (Array.isArray(workspaceData.employees)) {
+        activeEmployeesStore = workspaceData.employees;
+      }
+      if (Array.isArray(workspaceData.tasks)) {
+        activeTasksStore = workspaceData.tasks;
+      }
+      res.json({ success: true, mode: 'demo' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to sync workspace' });
+    }
+  });
+
+  // Seed Starter Sample Template for Authenticated User
+  app.post('/api/workspace/seed-demo', authMiddleware, (req: AuthenticatedRequest, res) => {
+    try {
+      const populated = seedStarterTemplate(req.user!.userId);
+      res.json({ success: true, workspace: populated });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to seed sample template' });
+    }
+  });
+
+
+  // ==========================================
+  // VOICE AGENT TOOLS & BACKEND REST APIS
+  // ==========================================
+
+  // 1. Team Workload Tool API
+  app.all('/api/voice/team-workload', (req, res) => {
+    try {
+      const employees = req.body?.employees || activeEmployeesStore;
+      const tasks = req.body?.tasks || activeTasksStore;
+      const settings = req.body?.settings || INITIAL_SETTINGS;
+
+      const workloads = calculateAllWorkloads(employees, tasks, settings);
+      const analytics = calculateTeamAnalytics(employees, req.body?.projects || DEMO_PROJECTS, tasks, settings);
+
+      const overloaded = workloads
+        .filter((w) => w.status === 'OVERLOADED' || w.status === 'CRITICAL' || w.utilization >= 85)
+        .map((w) => ({
+          employeeId: w.employee.id,
+          name: w.employee.name,
+          role: w.employee.role,
+          utilization: w.utilization,
+          assignedHours: w.assignedHours,
+          availableHours: w.availableHours,
+          activeTasks: w.activeTasksCount,
+          weeklyCapacity: w.weeklyCapacity,
+          status: w.status,
+          riskLevel: w.riskLevel
+        }));
+
+      const available = workloads
+        .filter((w) => w.status === 'AVAILABLE' || w.utilization <= 65)
+        .sort((a, b) => b.availableHours - a.availableHours)
+        .map((w) => ({
+          employeeId: w.employee.id,
+          name: w.employee.name,
+          role: w.employee.role,
+          utilization: w.utilization,
+          assignedHours: w.assignedHours,
+          availableHours: w.availableHours,
+          activeTasks: w.activeTasksCount,
+          weeklyCapacity: w.weeklyCapacity,
+          status: w.status,
+          skills: w.employee.skills
+        }));
+
+      const healthy = workloads
+        .filter((w) => w.status === 'HEALTHY' || (w.utilization > 65 && w.utilization < 85))
+        .map((w) => ({
+          employeeId: w.employee.id,
+          name: w.employee.name,
+          role: w.employee.role,
+          utilization: w.utilization,
+          assignedHours: w.assignedHours,
+          availableHours: w.availableHours,
+          activeTasks: w.activeTasksCount,
+          status: w.status
+        }));
+
+      res.json({
+        teamSize: employees.length,
+        teamUtilization: analytics.teamUtilization,
+        totalAssignedHours: analytics.totalAssignedHours,
+        totalAvailableHours: analytics.totalAvailableHours,
+        overloaded,
+        available,
+        healthy,
+        summary: `${overloaded.length} overloaded (${overloaded.map((o) => o.name).join(', ') || 'None'}), ${available.length} available with capacity.`
+      });
+    } catch (err: any) {
+      console.error('Voice team workload error:', err);
+      res.status(500).json({ error: err.message || 'Failed to calculate team workload' });
+    }
+  });
+
+  // 2. Individual Employee Workload Tool API
+  app.all(['/api/voice/employee-workload', '/api/voice/employee-workload/:employeeId'], (req, res) => {
+    try {
+      const employeeId =
+        req.params?.employeeId ||
+        req.query?.employeeId ||
+        req.body?.employeeId ||
+        req.query?.name ||
+        req.body?.name;
+      const employees = req.body?.employees || activeEmployeesStore;
+      const tasks = req.body?.tasks || activeTasksStore;
+      const settings = req.body?.settings || INITIAL_SETTINGS;
+
+      let emp = employees.find((e: Employee) => e.id === employeeId);
+      if (!emp && typeof employeeId === 'string') {
+        emp = employees.find((e: Employee) =>
+          e.name.toLowerCase().includes(employeeId.toLowerCase())
+        );
+      }
+      if (!emp) {
+        emp = employees[0]; // fallback
+      }
+
+      const workload = calculateEmployeeWorkload(emp, tasks, settings);
+      const activeTasks = workload.tasks.map((t) => ({
+        id: t.id,
+        taskNumber: t.taskNumber,
+        title: t.title,
+        priority: t.priority,
+        remainingHours: Math.round(t.estimatedHours * (1 - (t.progress || 0) / 100) * 10) / 10,
+        deadline: t.deadline,
+        requiredSkills: t.requiredSkills
+      }));
+      const highPriorityTasks = activeTasks.filter(
+        (t) => t.priority === 'High' || t.priority === 'Critical'
+      );
+
+      res.json({
+        employeeId: emp.id,
+        name: emp.name,
+        role: emp.role,
+        department: emp.department,
+        skills: emp.skills,
+        utilization: workload.utilization,
+        capacity: workload.weeklyCapacity,
+        usedCapacity: workload.assignedHours,
+        availableCapacity: workload.availableHours,
+        activeTasks: activeTasks.length,
+        highPriorityTasks,
+        upcomingDeadlines: activeTasks.map((t) => ({ title: t.title, deadline: t.deadline })),
+        workloadStatus: workload.status,
+        riskLevel: workload.riskLevel,
+        tasks: activeTasks
+      });
+    } catch (err: any) {
+      console.error('Voice employee workload error:', err);
+      res.status(500).json({ error: err.message || 'Failed to calculate employee workload' });
+    }
+  });
+
+  // 3. Delivery Risks Tool API
+  app.all('/api/voice/delivery-risks', (req, res) => {
+    try {
+      const employees = req.body?.employees || activeEmployeesStore;
+      const tasks = req.body?.tasks || activeTasksStore;
+      const projects = req.body?.projects || DEMO_PROJECTS;
+
+      const risks = analyzeAllRisks(tasks, employees, projects);
+      const formattedRisks = risks.map((r) => ({
+        taskId: r.taskId,
+        taskNumber: r.taskNumber,
+        taskTitle: r.taskTitle,
+        project: r.projectName,
+        assignee: r.assigneeName,
+        priority: tasks.find((t: Task) => t.id === r.taskId)?.priority || 'High',
+        deadline: tasks.find((t: Task) => t.id === r.taskId)?.deadline || '2026-09-10',
+        remainingEffort: `${r.remainingHours}h`,
+        remainingHours: r.remainingHours,
+        riskLevel: r.riskLevel,
+        riskScore: r.riskScore,
+        reason: r.primaryRiskFactor,
+        recommendedAction: r.recommendedAction,
+        workingDaysLeft: r.workingDaysLeft
+      }));
+
+      res.json({
+        totalRisks: formattedRisks.length,
+        highRisks: formattedRisks.filter((r) => r.riskLevel === 'High' || r.riskLevel === 'Critical'),
+        risks: formattedRisks
+      });
+    } catch (err: any) {
+      console.error('Voice delivery risks error:', err);
+      res.status(500).json({ error: err.message || 'Failed to analyze delivery risks' });
+    }
+  });
+
+  // 4. Simulate Task Reassignment Tool API
+  app.post('/api/voice/simulate-reassignment', (req, res) => {
+    try {
+      const { taskId, targetEmployeeId, taskTitle, employeeName } = req.body;
+      const employees = req.body?.employees || activeEmployeesStore;
+      const tasks = req.body?.tasks || activeTasksStore;
+      const settings = req.body?.settings || INITIAL_SETTINGS;
+
+      let targetEmp = employees.find((e: Employee) => e.id === targetEmployeeId);
+      if (!targetEmp && employeeName) {
+        targetEmp = employees.find((e: Employee) =>
+          e.name.toLowerCase().includes(employeeName.toLowerCase())
+        );
+      }
+      if (!targetEmp) targetEmp = employees.find((e: Employee) => e.id === 'emp_aman') || employees[1];
+
+      let targetTask = tasks.find((t: Task) => t.id === taskId);
+      if (!targetTask && taskTitle) {
+        targetTask = tasks.find((t: Task) =>
+          t.title.toLowerCase().includes(taskTitle.toLowerCase())
+        );
+      }
+      if (!targetTask) targetTask = tasks.find((t: Task) => t.assignedEmployeeId === 'emp_rahul') || tasks[0];
+
+      const currentAssignee =
+        employees.find((e: Employee) => e.id === targetTask.assignedEmployeeId) || employees[0];
+      const simulation = simulateTaskAssignment(targetTask.id, targetEmp.id, employees, tasks, settings);
+
+      const sourceCurrent = calculateEmployeeWorkload(currentAssignee, tasks, settings);
+      const remainingHours = targetTask.estimatedHours * (1 - (targetTask.progress || 0) / 100);
+      const sourceProjectedHours = Math.max(0, sourceCurrent.assignedHours - remainingHours);
+      const sourceProjectedUtil = Math.round(
+        (sourceProjectedHours / sourceCurrent.weeklyCapacity) * 100
+      );
+
+      res.json({
+        task: targetTask.title,
+        taskId: targetTask.id,
+        currentAssignee: currentAssignee.name,
+        currentAssigneeId: currentAssignee.id,
+        targetEmployee: targetEmp.name,
+        targetEmployeeId: targetEmp.id,
+        currentUtilization: sourceCurrent.utilization,
+        projectedCurrentUtilization: sourceProjectedUtil,
+        targetCurrentUtilization: simulation.currentUtilization,
+        projectedTargetUtilization: simulation.newUtilization,
+        riskBefore: sourceCurrent.riskLevel,
+        riskAfter: simulation.riskAfter,
+        recommendation: simulation.verdict,
+        reason: simulation.recommendationReason,
+        insights: simulation.keyInsights
+      });
+    } catch (err: any) {
+      console.error('Voice simulate reassignment error:', err);
+      res.status(500).json({ error: err.message || 'Failed to simulate reassignment' });
+    }
+  });
+
+  // 5. Propose Task Reassignment Tool API
+  app.post('/api/voice/propose-reassignment', (req, res) => {
+    try {
+      const {
+        taskId,
+        fromEmployeeId,
+        toEmployeeId,
+        reason,
+        taskTitle,
+        fromEmployeeName,
+        toEmployeeName
+      } = req.body;
+      const employees = req.body?.employees || activeEmployeesStore;
+      const tasks = req.body?.tasks || activeTasksStore;
+
+      const proposalId = `prop_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      const task = tasks.find(
+        (t: Task) =>
+          t.id === taskId || (taskTitle && t.title.toLowerCase().includes(taskTitle.toLowerCase()))
+      );
+      const fromEmp = employees.find(
+        (e: Employee) =>
+          e.id === fromEmployeeId ||
+          (fromEmployeeName && e.name.toLowerCase().includes(fromEmployeeName.toLowerCase()))
+      );
+      const toEmp = employees.find(
+        (e: Employee) =>
+          e.id === toEmployeeId ||
+          (toEmployeeName && e.name.toLowerCase().includes(toEmployeeName.toLowerCase()))
+      );
+
+      res.json({
+        proposalId,
+        requiresApproval: true,
+        status: 'PENDING',
+        taskId: task?.id || taskId,
+        taskTitle: task?.title || taskTitle || 'Payment Gateway',
+        fromEmployeeId: fromEmp?.id || fromEmployeeId,
+        fromEmployeeName: fromEmp?.name || fromEmployeeName || 'Rahul Sharma',
+        toEmployeeId: toEmp?.id || toEmployeeId,
+        toEmployeeName: toEmp?.name || toEmployeeName || 'Aman Verma',
+        reason:
+          reason ||
+          `Workload rebalancing: ${fromEmp?.name || 'Rahul'} is overloaded and ${toEmp?.name || 'Aman'} has available capacity.`
+      });
+    } catch (err: any) {
+      console.error('Voice propose reassignment error:', err);
+      res.status(500).json({ error: err.message || 'Failed to propose reassignment' });
+    }
+  });
+
+  // 6. Execute Task Reassignment Tool API
+  app.post('/api/voice/execute-reassignment', (req, res) => {
+    try {
+      const { taskId, toEmployeeId, fromEmployeeId } = req.body;
+      const employees = req.body?.employees || activeEmployeesStore;
+      let tasks = req.body?.tasks || activeTasksStore;
+      const settings = req.body?.settings || INITIAL_SETTINGS;
+
+      let targetTask = tasks.find((t: Task) => t.id === taskId);
+      if (!targetTask && req.body?.taskTitle) {
+        targetTask = tasks.find((t: Task) =>
+          t.title.toLowerCase().includes(req.body.taskTitle.toLowerCase())
+        );
+      }
+      if (!targetTask) {
+        targetTask = tasks.find((t: Task) => t.assignedEmployeeId === 'emp_rahul') || tasks[0];
+      }
+
+      let newEmp = employees.find((e: Employee) => e.id === toEmployeeId);
+      if (!newEmp && req.body?.toEmployeeName) {
+        newEmp = employees.find((e: Employee) =>
+          e.name.toLowerCase().includes(req.body.toEmployeeName.toLowerCase())
+        );
+      }
+      if (!newEmp) newEmp = employees.find((e: Employee) => e.id === 'emp_aman') || employees[1];
+
+      // Reassign in server activeTasksStore as well
+      targetTask.assignedEmployeeId = newEmp.id;
+      targetTask.status = targetTask.status === 'Backlog' ? 'Assigned' : targetTask.status;
+      targetTask.updatedAt = new Date().toISOString();
+
+      activeTasksStore = activeTasksStore.map((t) =>
+        t.id === targetTask!.id ? { ...targetTask! } : t
+      );
+
+      const updatedWorkloads = calculateAllWorkloads(employees, activeTasksStore, settings);
+      const updatedRisks = analyzeAllRisks(activeTasksStore, employees, req.body?.projects || DEMO_PROJECTS);
+
+      res.json({
+        success: true,
+        message: `Task "${targetTask.title}" successfully reassigned to ${newEmp.name}.`,
+        task: targetTask,
+        reassignedTo: {
+          id: newEmp.id,
+          name: newEmp.name
+        },
+        workloads: updatedWorkloads.map((w) => ({
+          name: w.employee.name,
+          utilization: w.utilization,
+          status: w.status
+        })),
+        riskCount: updatedRisks.filter((r) => r.riskLevel === 'High' || r.riskLevel === 'Critical').length
+      });
+    } catch (err: any) {
+      console.error('Voice execute reassignment error:', err);
+      res.status(500).json({ error: err.message || 'Failed to execute reassignment' });
+    }
+  });
+
+  // 7. Optimize Team Workload Tool API
+  app.post('/api/voice/optimize', (req, res) => {
+    try {
+      const employees = req.body?.employees || activeEmployeesStore;
+      const tasks = req.body?.tasks || activeTasksStore;
+      const projects = req.body?.projects || DEMO_PROJECTS;
+      const settings = req.body?.settings || INITIAL_SETTINGS;
+
+      const plan = runWorkloadOptimizer(employees, tasks, projects, settings);
+
+      const formattedRecommendations = plan.recommendations.map((r) => ({
+        taskId: r.taskId,
+        taskTitle: r.taskTitle,
+        from: r.currentEmployeeName,
+        to: r.recommendedEmployeeName,
+        fromEmployeeId: r.currentEmployeeId,
+        toEmployeeId: r.recommendedEmployeeId,
+        taskHours: r.taskHours,
+        reason: r.reasons[0],
+        riskImpact: r.deliveryRiskReduction
+      }));
+
+      res.json({
+        success: true,
+        count: formattedRecommendations.length,
+        teamRiskBefore: `${plan.teamRiskBefore}%`,
+        teamRiskAfter: `${plan.teamRiskAfter}%`,
+        totalHoursMoved: plan.totalHoursMoved,
+        recommendations: formattedRecommendations,
+        summary: `Found ${formattedRecommendations.length} recommendations reducing team delivery risk from ${plan.teamRiskBefore}% to ${plan.teamRiskAfter}%.`
+      });
+    } catch (err: any) {
+      console.error('Voice optimize error:', err);
+      res.status(500).json({ error: err.message || 'Failed to optimize team workload' });
+    }
+  });
+
+  // 8. Team Summary Tool API
+  app.all('/api/voice/team-summary', (req, res) => {
+    try {
+      const employees = req.body?.employees || activeEmployeesStore;
+      const tasks = req.body?.tasks || activeTasksStore;
+      const projects = req.body?.projects || DEMO_PROJECTS;
+      const settings = req.body?.settings || INITIAL_SETTINGS;
+
+      const analytics = calculateTeamAnalytics(employees, projects, tasks, settings);
+      const workloads = calculateAllWorkloads(employees, tasks, settings);
+      const overloaded = workloads.filter((w) => w.utilization >= 85);
+      const available = workloads.filter((w) => w.utilization <= 65);
+
+      res.json({
+        teamSize: employees.length,
+        activeTasks: analytics.activeTasks,
+        activeProjects: analytics.activeProjects,
+        teamUtilization: `${analytics.teamUtilization}%`,
+        overloadedCount: overloaded.length,
+        overloadedNames: overloaded.map((o) => o.employee.name),
+        availableCount: available.length,
+        availableNames: available.map((a) => a.employee.name),
+        onTimeRate: `${analytics.onTimeCompletionRate}%`
+      });
+    } catch (err: any) {
+      console.error('Voice team summary error:', err);
+      res.status(500).json({ error: err.message || 'Failed to generate team summary' });
+    }
+  });
+
 
   // Task AI recommendation endpoint
   app.post('/api/gemini/task-recommendation', async (req, res) => {
@@ -508,21 +1160,60 @@ Provide a clear, professional, well-structured response to the user with exact n
         reply = `**AI Workload Optimization Proposal:**\n\nI simulated a team rebalance plan that reduces overall delivery risk from **${optPlan.teamRiskBefore}% down to ${optPlan.teamRiskAfter}%**:\n\n` +
           optPlan.recommendations.map((r) => `• **Move "${r.taskTitle}" (${r.taskHours}h)** from **${r.currentEmployeeName}** to **${r.recommendedEmployeeName}**\n  ↳ ${r.reasons.slice(0, 2).join('; ')}`).join('\n\n') +
           `\n\n*Review and approve the proposed rebalance below.*`;
-      } else if (userQueryLower.includes('rahul')) {
-        const rahul = employees.find((e: Employee) => e.name.toLowerCase().includes('rahul')) || employees[0];
-        const rWorkload = calculateEmployeeWorkload(rahul, tasks, settings);
+      } else if (userQueryLower.includes('recommend') || userQueryLower.includes('who should') || userQueryLower.includes('who can do') || userQueryLower.includes('assignee for')) {
+        const dummyTask = {
+          id: 'custom_query_task',
+          title: userQuery.replace(/recommend|assignee|who should|who can do|for/gi, '').trim() || 'New Deliverable',
+          estimatedHours: 16,
+          requiredSkills: ['Node.js', 'React', 'TypeScript', 'API'],
+          priority: 'High' as const,
+          deadline: '2026-09-12'
+        };
+        const rankings = rankEmployeesForTask(dummyTask, employees, tasks, projects, settings);
+        const top = rankings[0];
         toolCalls.push({
-          name: 'getEmployeeDetails',
-          args: { employeeId: rahul.id },
-          result: { name: rahul.name, utilization: `${rWorkload.utilization}%`, assigned: `${rWorkload.assignedHours}h` }
+          name: 'recommendEmployee',
+          args: { taskTitle: dummyTask.title, estimatedHours: 16 },
+          result: rankings.slice(0, 3).map((r) => ({
+            name: r.employee.name,
+            score: r.totalScore,
+            utilization: `${r.utilization}%`,
+            available: `${r.availableHours}h`,
+            predictedDeadline: r.predictedDeadline
+          }))
         });
 
-        reply = `**Rahul Sharma Profile & Capacity Audit:**\n` +
-          `• **Role**: ${rahul.role} (${rahul.department})\n` +
-          `• **Current Utilization**: **${rWorkload.utilization}% (OVERLOADED)**\n` +
-          `• **Assigned Work**: ${rWorkload.assignedHours}h / ${rWorkload.weeklyCapacity}h capacity\n` +
-          `• **Active Deliverables**: ${rWorkload.activeTasksCount} tasks (including APX-102 Checkout Wizard, APX-103 Catalog GraphQL, QTM-203 Stripe 3DS, PLS-302 Analytics API).\n\n` +
-          `💡 **Action Plan**: Moving Task **PLS-302 (Analytics API - 8h)** to **Aman Verma** will instantly drop Rahul to a sustainable **74% utilization**.`;
+        reply = `**AI Task Assignment Recommendation for "${dummyTask.title}":**\n\n` +
+          `🥇 **Top Ranked: ${top.employee.name} (${top.employee.role})** — **Score: ${top.totalScore}/100**\n` +
+          `• **Available Bandwidth**: ${top.availableHours}h (Current utilization: ${top.utilization}%)\n` +
+          `• **Skill Match**: ${top.matchingSkills.join(', ') || 'Full stack competency'}\n` +
+          `• **Projected Completion**: ${top.predictedDeadline} (${top.estimatedWorkingDays} working days)\n` +
+          `• **Risk Assessment**: ${top.riskLevel} (${top.reasons[0]})\n\n` +
+          `**Alternative Candidates**:\n` +
+          rankings.slice(1, 3).map((r, i) => `${i + 2}. **${r.employee.name}** (Score: ${r.totalScore}/100, ${r.availableHours}h available, ${r.riskLevel} risk)`).join('\n');
+      } else if (employees.some((e: Employee) => userQueryLower.includes(e.name.toLowerCase().split(' ')[0]))) {
+        const matchedEmp = employees.find((e: Employee) => userQueryLower.includes(e.name.toLowerCase().split(' ')[0])) || employees[0];
+        const empWorkload = calculateEmployeeWorkload(matchedEmp, tasks, settings);
+        toolCalls.push({
+          name: 'getEmployeeDetails',
+          args: { employeeId: matchedEmp.id },
+          result: {
+            name: matchedEmp.name,
+            role: matchedEmp.role,
+            utilization: `${empWorkload.utilization}%`,
+            assignedHours: `${empWorkload.assignedHours}h`,
+            availableHours: `${empWorkload.availableHours}h`,
+            tasksCount: empWorkload.activeTasksCount
+          }
+        });
+
+        reply = `**${matchedEmp.name} — Profile & Capacity Audit:**\n` +
+          `• **Role & Department**: ${matchedEmp.role} • ${matchedEmp.department}\n` +
+          `• **Workload Status**: **${empWorkload.status} (${empWorkload.utilization}% utilization)**\n` +
+          `• **Capacity**: ${empWorkload.assignedHours}h assigned / ${empWorkload.weeklyCapacity}h total (${empWorkload.availableHours}h available)\n` +
+          `• **Skills**: ${matchedEmp.skills.join(', ')}\n` +
+          `• **Active Deliverables (${empWorkload.activeTasksCount})**:\n` +
+          empWorkload.tasks.map((t) => `  - **${t.taskNumber}**: ${t.title} (${t.priority}, ${Math.round(t.estimatedHours * (1 - (t.progress || 0) / 100))}h left, Due: ${t.deadline})`).join('\n');
       } else {
         reply = `I have analyzed the live workforce data. Here is the operational overview:\n\n` +
           `• **Team Members**: ${employees.length} active engineers\n` +

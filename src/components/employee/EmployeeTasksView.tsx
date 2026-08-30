@@ -23,8 +23,9 @@ export const EmployeeTasksView: React.FC = () => {
     openTaskDetailModal
   } = useApp();
 
-  const currentEmployee = employees.find((e) => e.id === currentUser.employeeId) || employees[1];
-  const myTasks = tasks.filter((t) => t.assignedEmployeeId === currentEmployee.id);
+  const currentEmployee = employees.find((e) => e.id === currentUser.employeeId) || employees[0];
+  const myTasks = currentEmployee ? tasks.filter((t) => t.assignedEmployeeId === currentEmployee.id) : [];
+
 
   return (
     <div className="space-y-6 pb-12">

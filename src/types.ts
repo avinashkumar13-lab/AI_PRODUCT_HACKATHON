@@ -18,10 +18,30 @@ export interface User {
   employeeId?: string;
   title: string;
   avatar: string;
+  company?: string;
+  isDemo?: boolean;
+}
+
+export interface TaskComment {
+  id: string;
+  authorName: string;
+  authorAvatar: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface TaskAttachment {
+  id: string;
+  name: string;
+  size: string;
+  type: string;
+  url: string;
+  uploadedAt: string;
 }
 
 export interface Employee {
   id: string;
+  userId?: string;
   name: string;
   email: string;
   role: string;
@@ -46,6 +66,7 @@ export interface Milestone {
 
 export interface Project {
   id: string;
+  userId?: string;
   name: string;
   key: string;
   description: string;
@@ -63,6 +84,7 @@ export interface Project {
 
 export interface Task {
   id: string;
+  userId?: string;
   taskNumber: string;
   title: string;
   description: string;
@@ -80,6 +102,8 @@ export interface Task {
   progress: number; // 0, 25, 50, 75, 100
   riskLevel: RiskLevel;
   riskReason?: string;
+  comments?: TaskComment[];
+  attachments?: TaskAttachment[];
   createdAt: string;
   updatedAt: string;
 }
@@ -124,6 +148,7 @@ export interface AIRecommendation {
 
 export interface Notification {
   id: string;
+  userId?: string;
   title: string;
   message: string;
   type: 'info' | 'warning' | 'alert' | 'success';
@@ -131,6 +156,21 @@ export interface Notification {
   read: boolean;
   actionRequired?: boolean;
   relatedId?: string;
+}
+
+export interface AuthSession {
+  token: string;
+  user: User;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: User;
+  workspace: {
+    employeesCount: number;
+    projectsCount: number;
+    tasksCount: number;
+  };
 }
 
 export interface ThresholdSettings {

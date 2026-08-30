@@ -5,8 +5,9 @@ import { FolderKanban, CheckCircle2, Clock, Users } from 'lucide-react';
 export const EmployeeProjectsView: React.FC = () => {
   const { currentUser, employees, projects, tasks } = useApp();
 
-  const currentEmployee = employees.find((e) => e.id === currentUser.employeeId) || employees[1];
-  const myProjects = projects.filter((p) => p.teamMemberIds?.includes(currentEmployee.id));
+  const currentEmployee = employees.find((e) => e.id === currentUser.employeeId) || employees[0];
+  const myProjects = currentEmployee ? projects.filter((p) => p.teamMemberIds?.includes(currentEmployee.id)) : [];
+
 
   return (
     <div className="space-y-6 pb-12">

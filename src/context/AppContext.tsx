@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
   User,
   UserRole,
@@ -21,13 +21,37 @@ import {
   INITIAL_NOTIFICATIONS,
   INITIAL_SETTINGS
 } from '../data/initialData';
-import { calculateAllWorkloads, calculateTeamAnalytics, calculateEmployeeWorkload } from '../utils/workloadEngine';
+import { calculateAllWorkloads, calculateTeamAnalytics } from '../utils/workloadEngine';
 import { runWorkloadOptimizer } from '../utils/optimizerEngine';
 import confetti from 'canvas-confetti';
 
 interface AppContextType {
+  // Auth state
+  isAuthenticated: boolean;
+  isDemoMode: boolean;
+  token: string | null;
   currentUser: User;
   currentRole: UserRole;
+  isWorkspaceEmpty: boolean;
+
+  // Auth modal controls
+  isAuthModalOpen: boolean;
+  authModalMode: 'login' | 'signup' | 'forgot_password' | 'reset_password';
+  openAuthModal: (mode?: 'login' | 'signup' | 'forgot_password' | 'reset_password') => void;
+  closeAuthModal: () => void;
+  setAuthModalMode: (mode: 'login' | 'signup' | 'forgot_password' | 'reset_password') => void;
+
+  // Auth operations
+  login: (email: string, password: string) => Promise<boolean>;
+  signup: (name: string, email: string, password: string, role?: UserRole, company?: string) => Promise<boolean>;
+  logout: () => void;
+  forgotPassword: (email: string) => Promise<{ success: boolean; message: string; resetCode?: string }>;
+  resetPassword: (email: string, resetCode: string, newPassword: string) => Promise<boolean>;
+  enterDemoMode: () => void;
+  exitDemoMode: () => void;
+  seedDemoData: () => Promise<void>;
+
+  // Data state
   selectedEmployeeId: string;
   employees: Employee[];
   projects: Project[];
@@ -36,6 +60,8 @@ interface AppContextType {
   notifications: Notification[];
   settings: AppSettings;
   activeTab: string;
+
+  // Modals state
   selectedEmployeeForModal: Employee | null;
   selectedTaskForModal: Task | null;
   isCreateTaskModalOpen: boolean;
@@ -50,7 +76,7 @@ interface AppContextType {
   unreadNotificationsCount: number;
   pendingRecommendationsCount: number;
 
-  // Actions
+  // Data mutation actions
   setActiveTab: (tab: string) => void;
   switchRole: (role: UserRole, employeeId?: string) => void;
   createTask: (taskData: Partial<Task>, autoAssignEmployeeId?: string | null) => Task;
@@ -87,35 +113,60 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'teampilot_ai_state_v1';
+const TOKEN_KEY = 'teampilot_jwt_token';
+const USER_KEY = 'teampilot_auth_user';
+const STORAGE_PREFIX = 'teampilot_ws_';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Load initial state from local storage if available
-  const [currentRole, setCurrentRole] = useState<UserRole>('manager');
-  const [currentUser, setCurrentUser] = useState<User>(DEMO_MANAGER_USER);
+  // Authentication states
+  const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_KEY));
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => !!localStorage.getItem(TOKEN_KEY));
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(() => !localStorage.getItem(TOKEN_KEY));
+  const [currentUser, setCurrentUser] = useState<User>(() => {
+    const saved = localStorage.getItem(USER_KEY);
+    return saved ? JSON.parse(saved) : DEMO_MANAGER_USER;
+  });
+  const [currentRole, setCurrentRole] = useState<UserRole>(() => {
+    const saved = localStorage.getItem(USER_KEY);
+    return saved ? JSON.parse(saved).role : 'manager';
+  });
+
+  // Auth modal states
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'signup' | 'forgot_password' | 'reset_password'>('login');
+
+  // Workspace data states (initialized based on auth status)
+  const currentUserId = isAuthenticated ? currentUser.id : 'demo_guest';
+  const getStorageKey = (key: string) => `${STORAGE_PREFIX}${currentUserId}_${key}`;
+
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('emp_aman');
   const [employees, setEmployees] = useState<Employee[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY + '_employees');
-    return saved ? JSON.parse(saved) : DEMO_EMPLOYEES;
+    if (!isAuthenticated) return DEMO_EMPLOYEES;
+    const saved = localStorage.getItem(getStorageKey('employees'));
+    return saved ? JSON.parse(saved) : [];
   });
   const [projects, setProjects] = useState<Project[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY + '_projects');
-    return saved ? JSON.parse(saved) : DEMO_PROJECTS;
+    if (!isAuthenticated) return DEMO_PROJECTS;
+    const saved = localStorage.getItem(getStorageKey('projects'));
+    return saved ? JSON.parse(saved) : [];
   });
   const [tasks, setTasks] = useState<Task[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY + '_tasks');
-    return saved ? JSON.parse(saved) : DEMO_TASKS;
+    if (!isAuthenticated) return DEMO_TASKS;
+    const saved = localStorage.getItem(getStorageKey('tasks'));
+    return saved ? JSON.parse(saved) : [];
   });
   const [recommendations, setRecommendations] = useState<AIRecommendation[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY + '_recommendations');
-    return saved ? JSON.parse(saved) : INITIAL_RECOMMENDATIONS;
+    if (!isAuthenticated) return INITIAL_RECOMMENDATIONS;
+    const saved = localStorage.getItem(getStorageKey('recommendations'));
+    return saved ? JSON.parse(saved) : [];
   });
   const [notifications, setNotifications] = useState<Notification[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY + '_notifications');
-    return saved ? JSON.parse(saved) : INITIAL_NOTIFICATIONS;
+    if (!isAuthenticated) return INITIAL_NOTIFICATIONS;
+    const saved = localStorage.getItem(getStorageKey('notifications'));
+    return saved ? JSON.parse(saved) : [];
   });
   const [settings, setSettings] = useState<AppSettings>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY + '_settings');
+    const saved = localStorage.getItem(getStorageKey('settings'));
     return saved ? JSON.parse(saved) : INITIAL_SETTINGS;
   });
 
@@ -130,30 +181,109 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isEmployeeDetailModalOpen, setIsEmployeeDetailModalOpen] = useState<boolean>(false);
   const [isTaskDetailModalOpen, setIsTaskDetailModalOpen] = useState<boolean>(false);
 
-  // Save to local storage on state changes
+  // Check if authenticated workspace is empty
+  const isWorkspaceEmpty = isAuthenticated && employees.length === 0 && projects.length === 0 && tasks.length === 0;
+
+  // Persist state to local storage and sync to backend
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_employees', JSON.stringify(employees));
-  }, [employees]);
+    if (isAuthenticated) {
+      localStorage.setItem(getStorageKey('employees'), JSON.stringify(employees));
+    }
+  }, [employees, isAuthenticated, currentUserId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_projects', JSON.stringify(projects));
-  }, [projects]);
+    if (isAuthenticated) {
+      localStorage.setItem(getStorageKey('projects'), JSON.stringify(projects));
+    }
+  }, [projects, isAuthenticated, currentUserId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_tasks', JSON.stringify(tasks));
-  }, [tasks]);
+    if (isAuthenticated) {
+      localStorage.setItem(getStorageKey('tasks'), JSON.stringify(tasks));
+    }
+  }, [tasks, isAuthenticated, currentUserId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_recommendations', JSON.stringify(recommendations));
-  }, [recommendations]);
+    if (isAuthenticated) {
+      localStorage.setItem(getStorageKey('recommendations'), JSON.stringify(recommendations));
+    }
+  }, [recommendations, isAuthenticated, currentUserId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_notifications', JSON.stringify(notifications));
-  }, [notifications]);
+    if (isAuthenticated) {
+      localStorage.setItem(getStorageKey('notifications'), JSON.stringify(notifications));
+    }
+  }, [notifications, isAuthenticated, currentUserId]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY + '_settings', JSON.stringify(settings));
-  }, [settings]);
+    localStorage.setItem(getStorageKey('settings'), JSON.stringify(settings));
+  }, [settings, currentUserId]);
+
+  // Sync to backend periodically or on major change
+  const syncWorkspaceToBackend = useCallback(async () => {
+    try {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      await fetch('/api/workspace/sync', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          employees,
+          projects,
+          tasks,
+          recommendations,
+          notifications,
+          settings
+        })
+      });
+    } catch (e) {
+      // Background sync silent failover
+    }
+  }, [token, employees, projects, tasks, recommendations, notifications, settings]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      syncWorkspaceToBackend();
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [syncWorkspaceToBackend]);
+
+  // Load user data on startup if token exists
+  useEffect(() => {
+    if (token) {
+      fetch('/api/auth/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      })
+        .then((res) => {
+          if (res.ok) return res.json();
+          throw new Error('Token expired');
+        })
+        .then((data) => {
+          if (data.user) {
+            setCurrentUser(data.user);
+            setCurrentRole(data.user.role);
+            if (data.workspace) {
+              setEmployees(data.workspace.employees || []);
+              setProjects(data.workspace.projects || []);
+              setTasks(data.workspace.tasks || []);
+              setRecommendations(data.workspace.recommendations || []);
+              setNotifications(data.workspace.notifications || []);
+              if (data.workspace.settings) setSettings(data.workspace.settings);
+            }
+          }
+        })
+        .catch(() => {
+          // Token invalid, logout gracefully
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(USER_KEY);
+          setToken(null);
+          setIsAuthenticated(false);
+          setIsDemoMode(true);
+        });
+    }
+  }, []);
 
   // Compute live workloads & team analytics
   const workloads = calculateAllWorkloads(employees, tasks, settings);
@@ -173,24 +303,220 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Auth Functions
+  const openAuthModal = (mode: 'login' | 'signup' | 'forgot_password' | 'reset_password' = 'login') => {
+    setAuthModalMode(mode);
+    setIsAuthModalOpen(true);
+  };
+
+  const closeAuthModal = () => setIsAuthModalOpen(false);
+
+  const login = async (email: string, password: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      if (!res.ok) return false;
+
+      const data = await res.json();
+      setToken(data.token);
+      setCurrentUser(data.user);
+      setCurrentRole(data.user.role);
+      setIsAuthenticated(true);
+      setIsDemoMode(false);
+
+      localStorage.setItem(TOKEN_KEY, data.token);
+      localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+
+      if (data.workspace) {
+        setEmployees(data.workspace.employees || []);
+        setProjects(data.workspace.projects || []);
+        setTasks(data.workspace.tasks || []);
+        setRecommendations(data.workspace.recommendations || []);
+        setNotifications(data.workspace.notifications || []);
+        if (data.workspace.settings) setSettings(data.workspace.settings);
+      }
+
+      triggerCelebration();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const signup = async (
+    name: string,
+    email: string,
+    password: string,
+    role: UserRole = 'manager',
+    company = 'My Enterprise'
+  ): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, password, role, company })
+      });
+
+      if (!res.ok) return false;
+
+      const data = await res.json();
+      setToken(data.token);
+      setCurrentUser(data.user);
+      setCurrentRole(data.user.role);
+      setIsAuthenticated(true);
+      setIsDemoMode(false);
+
+      localStorage.setItem(TOKEN_KEY, data.token);
+      localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+
+      // Brand new isolated workspace starts completely empty
+      setEmployees([]);
+      setProjects([]);
+      setTasks([]);
+      setRecommendations([]);
+      setNotifications(data.workspace?.notifications || [
+        {
+          id: `notif_${Date.now()}`,
+          title: 'Welcome to Team Pilot AI',
+          message: 'Workspace initialized. Start adding team members or creating projects.',
+          type: 'info',
+          timestamp: 'Just now',
+          read: false
+        }
+      ]);
+
+      triggerCelebration();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const logout = () => {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_KEY);
+    setToken(null);
+    setIsAuthenticated(false);
+    setIsDemoMode(true);
+    setCurrentUser(DEMO_MANAGER_USER);
+    setCurrentRole('manager');
+    setEmployees(DEMO_EMPLOYEES);
+    setProjects(DEMO_PROJECTS);
+    setTasks(DEMO_TASKS);
+    setRecommendations(INITIAL_RECOMMENDATIONS);
+    setNotifications(INITIAL_NOTIFICATIONS);
+    setSettings(INITIAL_SETTINGS);
+    setActiveTab('dashboard');
+  };
+
+  const forgotPassword = async (email: string) => {
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      return await res.json();
+    } catch (err: any) {
+      return { success: false, message: err.message || 'Failed to send recovery code' };
+    }
+  };
+
+  const resetPassword = async (email: string, resetCode: string, newPassword: string) => {
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, resetCode, newPassword })
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const enterDemoMode = () => {
+    setIsDemoMode(true);
+    setEmployees(DEMO_EMPLOYEES);
+    setProjects(DEMO_PROJECTS);
+    setTasks(DEMO_TASKS);
+    setRecommendations(INITIAL_RECOMMENDATIONS);
+    setNotifications(INITIAL_NOTIFICATIONS);
+    setSettings(INITIAL_SETTINGS);
+  };
+
+  const exitDemoMode = () => {
+    if (!isAuthenticated) {
+      openAuthModal('login');
+    }
+  };
+
+  const seedDemoData = async () => {
+    if (token) {
+      try {
+        const res = await fetch('/api/workspace/seed-demo', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.workspace) {
+            setEmployees(data.workspace.employees);
+            setProjects(data.workspace.projects);
+            setTasks(data.workspace.tasks);
+            setRecommendations(data.workspace.recommendations);
+            setNotifications(data.workspace.notifications);
+            triggerCelebration();
+            return;
+          }
+        }
+      } catch {
+        // Fallback local seed
+      }
+    }
+
+    setEmployees(DEMO_EMPLOYEES.map((e) => ({ ...e, userId: currentUser.id })));
+    setProjects(DEMO_PROJECTS.map((p) => ({ ...p, userId: currentUser.id })));
+    setTasks(DEMO_TASKS.map((t) => ({ ...t, userId: currentUser.id })));
+    setRecommendations(INITIAL_RECOMMENDATIONS.map((r) => ({ ...r, userId: currentUser.id })));
+    setNotifications([
+      {
+        id: `notif_${Date.now()}`,
+        userId: currentUser.id,
+        title: 'Starter Template Loaded',
+        message: 'Successfully populated workspace with sample engineering team, projects, and active tasks.',
+        type: 'success',
+        timestamp: 'Just now',
+        read: false
+      }
+    ]);
+    triggerCelebration();
+  };
+
   const switchRole = (role: UserRole, empId?: string) => {
     setCurrentRole(role);
     if (role === 'manager') {
-      setCurrentUser(DEMO_MANAGER_USER);
+      setCurrentUser(isAuthenticated ? { ...currentUser, role: 'manager' } : DEMO_MANAGER_USER);
       setActiveTab('dashboard');
     } else {
-      const targetEmpId = empId || selectedEmployeeId || 'emp_aman';
+      const targetEmpId = empId || selectedEmployeeId || (employees[0]?.id || 'emp_aman');
       setSelectedEmployeeId(targetEmpId);
-      const emp = employees.find((e) => e.id === targetEmpId) || employees[1]; // default Aman
-      setCurrentUser({
-        id: `usr_${emp.id}`,
-        name: emp.name,
-        email: emp.email,
-        role: 'team_member',
-        employeeId: emp.id,
-        title: emp.role,
-        avatar: emp.avatar
-      });
+      const emp = employees.find((e) => e.id === targetEmpId) || employees[0];
+      if (emp) {
+        setCurrentUser({
+          id: `usr_${emp.id}`,
+          name: emp.name,
+          email: emp.email,
+          role: 'team_member',
+          employeeId: emp.id,
+          title: emp.role,
+          avatar: emp.avatar
+        });
+      }
       setActiveTab('my_dashboard');
     }
   };
@@ -198,14 +524,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const createTask = (taskData: Partial<Task>, autoAssignEmployeeId?: string | null): Task => {
     const nextNumber = tasks.length + 101;
     const project = projects.find((p) => p.id === taskData.projectId) || projects[0];
-    const projectKey = project.key || 'TASK';
+    const projectKey = project?.key || 'TASK';
 
     const newTask: Task = {
       id: `task_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+      userId: currentUser.id,
       taskNumber: `${projectKey}-${nextNumber}`,
       title: taskData.title || 'New Task',
       description: taskData.description || '',
-      projectId: taskData.projectId || projects[0].id,
+      projectId: taskData.projectId || projects[0]?.id || 'proj_default',
       priority: taskData.priority || 'Medium',
       estimatedHours: Number(taskData.estimatedHours) || 8,
       actualHours: 0,
@@ -219,6 +546,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       progress: 0,
       riskLevel: taskData.riskLevel || 'Low',
       riskReason: taskData.riskReason,
+      comments: [],
+      attachments: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -229,6 +558,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const assignedEmp = employees.find((e) => e.id === newTask.assignedEmployeeId);
     const newNotif: Notification = {
       id: `notif_${Date.now()}`,
+      userId: currentUser.id,
       title: 'New Task Created',
       message: assignedEmp 
         ? `Task ${newTask.taskNumber} assigned to ${assignedEmp.name}.`
@@ -276,6 +606,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setNotifications((prev) => [
           {
             id: `notif_${Date.now()}`,
+            userId: currentUser.id,
             title: 'Task Assigned',
             message: `Task ${targetTask.taskNumber} (${targetTask.title}) assigned to ${emp.name}.`,
             type: 'info',
@@ -306,6 +637,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setNotifications((prev) => [
         {
           id: `notif_${Date.now()}`,
+          userId: currentUser.id,
           title: 'Workload Rebalanced',
           message: `Reassigned "${targetTask.title}" from ${oldEmp?.name || 'Unassigned'} to ${newEmp.name}.`,
           type: 'success',
@@ -384,6 +716,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications((prev) => [
       {
         id: `notif_${Date.now()}`,
+        userId: currentUser.id,
         title: 'AI Recommendation Approved',
         message: `Approved: ${rec.title}. Workload and deadlines updated.`,
         type: 'success',
@@ -417,6 +750,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications((prev) => [
       {
         id: `notif_${Date.now()}`,
+        userId: currentUser.id,
         title: 'Team Workload Fully Optimized',
         message: `Applied ${pending.length} AI task redistributions. Team utilization balanced!`,
         type: 'success',
@@ -430,7 +764,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const runOptimizer = () => {
     const plan = runWorkloadOptimizer(employees, tasks, projects, settings);
     setRecommendations((prev) => {
-      // Keep existing non-pending and prepend new ones
       const existingIds = new Set(plan.recommendations.map((r) => r.taskId));
       const filtered = prev.filter((r) => !existingIds.has(r.taskId) || r.status !== 'pending');
       return [...plan.recommendations, ...filtered];
@@ -439,6 +772,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setNotifications((prev) => [
       {
         id: `notif_${Date.now()}`,
+        userId: currentUser.id,
         title: 'AI Optimization Complete',
         message: `Generated ${plan.recommendations.length} recommendations. Potential risk reduction: ${plan.teamRiskBefore}% → ${plan.teamRiskAfter}%.`,
         type: 'info',
@@ -455,6 +789,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const id = `emp_${Date.now()}`;
     const employee: Employee = {
       id,
+      userId: currentUser.id,
       name: newEmp.name || 'New Engineer',
       email: newEmp.email || `${id}@teampilot.ai`,
       role: newEmp.role || 'Software Engineer',
@@ -470,6 +805,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       completedTasksCount: 0
     };
     setEmployees((prev) => [...prev, employee]);
+    triggerCelebration();
   };
 
   const updateEmployee = (empId: string, updates: Partial<Employee>) => {
@@ -481,6 +817,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const createProject = (proj: Partial<Project>) => {
     const newProject: Project = {
       id: `proj_${Date.now()}`,
+      userId: currentUser.id,
       name: proj.name || 'New Project',
       key: proj.key || 'PROJ',
       description: proj.description || '',
@@ -498,6 +835,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ]
     };
     setProjects((prev) => [...prev, newProject]);
+    triggerCelebration();
   };
 
   const updateProject = (projId: string, updates: Partial<Project>) => {
@@ -517,24 +855,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetToDemoData = () => {
-    localStorage.removeItem(STORAGE_KEY + '_employees');
-    localStorage.removeItem(STORAGE_KEY + '_projects');
-    localStorage.removeItem(STORAGE_KEY + '_tasks');
-    localStorage.removeItem(STORAGE_KEY + '_recommendations');
-    localStorage.removeItem(STORAGE_KEY + '_notifications');
-    localStorage.removeItem(STORAGE_KEY + '_settings');
-
-    setEmployees(DEMO_EMPLOYEES);
-    setProjects(DEMO_PROJECTS);
-    setTasks(DEMO_TASKS);
-    setRecommendations(INITIAL_RECOMMENDATIONS);
-    setNotifications(INITIAL_NOTIFICATIONS);
-    setSettings(INITIAL_SETTINGS);
-    setCurrentRole('manager');
-    setCurrentUser(DEMO_MANAGER_USER);
-    setActiveTab('dashboard');
-
-    triggerCelebration();
+    if (!isAuthenticated) {
+      setEmployees(DEMO_EMPLOYEES);
+      setProjects(DEMO_PROJECTS);
+      setTasks(DEMO_TASKS);
+      setRecommendations(INITIAL_RECOMMENDATIONS);
+      setNotifications(INITIAL_NOTIFICATIONS);
+      setSettings(INITIAL_SETTINGS);
+      setCurrentRole('manager');
+      setCurrentUser(DEMO_MANAGER_USER);
+      setActiveTab('dashboard');
+      triggerCelebration();
+    } else {
+      seedDemoData();
+    }
   };
 
   const updateSettings = (newSettings: Partial<AppSettings>) => {
@@ -569,8 +903,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return (
     <AppContext.Provider
       value={{
+        isAuthenticated,
+        isDemoMode,
+        token,
         currentUser,
         currentRole,
+        isWorkspaceEmpty,
+        isAuthModalOpen,
+        authModalMode,
+        openAuthModal,
+        closeAuthModal,
+        setAuthModalMode,
+        login,
+        signup,
+        logout,
+        forgotPassword,
+        resetPassword,
+        enterDemoMode,
+        exitDemoMode,
+        seedDemoData,
         selectedEmployeeId,
         employees,
         projects,

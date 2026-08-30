@@ -16,8 +16,11 @@ import {
   Sliders,
   Plus,
   UserCheck,
-  ChevronRight
+  ChevronRight,
+  Mic,
+  Volume2
 } from 'lucide-react';
+
 import {
   BarChart,
   Bar,
@@ -28,6 +31,7 @@ import {
   ResponsiveContainer,
   Cell
 } from 'recharts';
+import { EmptyStateOnboarding } from '../common/EmptyStateOnboarding';
 
 export const DashboardView: React.FC = () => {
   const {
@@ -47,7 +51,12 @@ export const DashboardView: React.FC = () => {
     setActiveTab
   } = useApp();
 
+  if (employees.length === 0 && projects.length === 0 && tasks.length === 0) {
+    return <EmptyStateOnboarding type="dashboard" />;
+  }
+
   const pendingRecs = recommendations.filter((r) => r.status === 'pending');
+
   const overloadedEmployees = workloads.filter((w) => w.utilization >= 80);
   const criticalTasks = tasks.filter((t) => (t.priority === 'Critical' || t.riskLevel === 'Critical') && t.status !== 'Completed');
 
@@ -91,7 +100,16 @@ export const DashboardView: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            onClick={() => setActiveTab('ai_copilot')}
+            className="flex items-center gap-2 px-5 py-3.5 bg-neutral-900 hover:bg-neutral-800 border border-[#FF3D00]/50 text-[#FF3D00] hover:text-white font-mono font-bold text-xs uppercase tracking-wider transition cursor-pointer shadow-lg shadow-[#FF3D00]/10 active:scale-95"
+          >
+            <Mic className="w-4 h-4 text-[#FF3D00]" />
+            <span>VOICE COPILOT</span>
+          </button>
+
+
           <button
             onClick={openOptimizerModal}
             className="flex items-center gap-2.5 px-6 py-3.5 bg-[#FF3D00] hover:bg-[#ff5722] text-black font-black text-xs uppercase tracking-widest transition cursor-pointer shadow-lg shadow-[#FF3D00]/20 active:scale-95"
@@ -109,6 +127,45 @@ export const DashboardView: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Proactive Overload Alert Banner */}
+      {overloadedEmployees.length > 0 && (
+        <div className="p-4 bg-gradient-to-r from-rose-950/40 via-neutral-900 to-neutral-950 border border-rose-800/80 text-white flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-rose-500/20 rounded-lg text-rose-400">
+              <Flame className="w-5 h-5 text-rose-500 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 font-mono text-xs font-bold text-rose-300 uppercase tracking-wider">
+                <span>Overload Alert:</span>
+                <span className="text-white">
+                  {overloadedEmployees.map((o) => `${o.employee.name} (${o.utilization}%)`).join(', ')}
+                </span>
+              </div>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Engineers exceed safe workload thresholds. Delivery risk elevated.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setActiveTab('ai_copilot')}
+              className="flex items-center gap-1.5 px-4 py-2 bg-neutral-900 hover:bg-neutral-800 border border-[#FF3D00]/60 text-[#FF3D00] font-mono text-xs font-bold transition"
+            >
+              <Mic className="w-3.5 h-3.5" />
+              <span>Ask Voice Copilot to Rebalance</span>
+            </button>
+            <button
+              onClick={openOptimizerModal}
+              className="flex items-center gap-1.5 px-4 py-2 bg-[#FF3D00] hover:bg-[#FF3D00]/90 text-black font-mono text-xs font-bold transition"
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>Auto-Redistribute</span>
+            </button>
+          </div>
+        </div>
+      )}
+
 
       {/* 8 Primary Executive Metric Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-4 gap-4">
